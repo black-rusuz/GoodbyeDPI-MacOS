@@ -59,11 +59,10 @@ rm -f "$REPO_DIR/ciadpi" 2>/dev/null || true
 chmod +x "$REPO_DIR/run.command"
 chmod +x "$REPO_DIR/uninstall.sh" 2>/dev/null || true
 
-# 3. Дефолтный конфиг с историей
+# 3. Проверка наличия файла config
 if [[ ! -f "$REPO_DIR/config" ]]; then
-    echo "Создание файла config с историей..."
-    echo "# $(date '+%Y-%m-%d %H:%M:%S') - Начальная проверенная стратегия" > "$REPO_DIR/config"
-    echo "-m 2 -d1 -d1+s -r1+s -s3+s -s6+s -s9+s -s12+s -s15+s -s20+s -s25+s -s30+s -s35+s -a1" >> "$REPO_DIR/config"
+    echo "Ошибка: файл config не найден в репозитории!"
+    exit 1
 fi
 
 # 4. Сборка автономного приложения ByeDPI.app в ~/Applications
@@ -71,7 +70,7 @@ echo "Формирование автономного приложения $APP_
 mkdir -p "$APP_DIR"
 rm -rf "$APP_PATH"
 
-# AppleScript-загрузчик: переиспользует первичное пустое окно терминала, предотвращая дублирование
+# AppleScript-загрузчик: переиспользует первичное окно терминала, предотвращая появление дубликатов
 osacompile -o "$APP_PATH" -e '
 set appPath to POSIX path of (path to me)
 set runScript to appPath & "Contents/Resources/run.command"

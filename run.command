@@ -15,30 +15,36 @@ fi
 CONFIG_FILE="$DIR/config"
 PORT="${BYEDPI_PORT:-1080}"
 IP="127.0.0.1"
+MAX_HISTORY=300
 CIADPI_PID=""
 
-# Функция получения последней активной стратегии из файла (пропуская комментарии и пустые строки)
+# Функция получения последней непустой строки конфига
 get_active_strategy() {
     if [[ -f "$CONFIG_FILE" ]]; then
-        grep -v "^[[:space:]]*#" "$CONFIG_FILE" 2>/dev/null | grep -v "^[[:space:]]*$" | tail -n 1
+        grep -v "^[[:space:]]*$" "$CONFIG_FILE" 2>/dev/null | tail -n 1
     fi
 }
 
-# Функция подсчета записей в истории
+# Функция подсчета записей в файле
 get_history_count() {
     if [[ -f "$CONFIG_FILE" ]]; then
-        grep -v "^[[:space:]]*#" "$CONFIG_FILE" 2>/dev/null | grep -v "^[[:space:]]*$" | wc -l | tr -d ' '
+        grep -v "^[[:space:]]*$" "$CONFIG_FILE" 2>/dev/null | wc -l | tr -d ' '
     else
         echo "0"
     fi
 }
 
-# Добавление новой стратегии в историю с временной меткой
-append_strategy() {
+# Добавление новой стратегии в историю с ограничением в 300 строк
+save_strategy() {
     local strat="$1"
-    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo "\n# $timestamp" >> "$CONFIG_FILE"
     echo "$strat" >> "$CONFIG_FILE"
+    
+    # Ограничение размера файла до MAX_HISTORY строк
+    local total_lines=$(grep -v "^[[:space:]]*$" "$CONFIG_FILE" 2>/dev/null | wc -l | tr -d ' ')
+    if (( total_lines > MAX_HISTORY )); then
+        local tmp="$CONFIG_FILE.tmp"
+        tail -n "$MAX_HISTORY" "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+    fi
 }
 
 # Если передана команда просмотра истории
@@ -47,6 +53,25 @@ if [[ "$1" == "--history" || "$1" == "-h" ]]; then
     cat "$CONFIG_FILE"
     exit 0
 fi
+
+# Получаем текущую (последнюю) стратегию строго из файла config
+ACTIVE_STRATEGY=$(get_active_strategy)
+if [[ -z "$ACTIVE_STRATEGY" ]]; then
+    echo "\033[1;31mОшибка: файл $CONFIG_FILE пуст или не найден!\033[0m"
+    echo "Создайте файл $CONFIG_FILE и укажите в нём хотя бы одну стратегию."
+    exit 1
+fi
+
+# Если аргументы переданы через командную строку
+if [[ $# -gt 0 ]]; then
+    NEW_STRAT="$*"
+    if [[ "$NEW_STRAT" != "$ACTIVE_STRATEGY" ]]; then
+        save_strategy "$NEW_STRAT"
+        ACTIVE_STRATEGY="$NEW_STRAT"
+    fi
+fi
+
+STRATEGY_ARGS=(${(z)ACTIVE_STRATEGY})
 
 # Автоматически определяем текущую активную сетевую службу (Wi-Fi, Ethernet и т.д.)
 IFACE=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')
@@ -66,6 +91,7 @@ start_ciadpi() {
 
     # 2. Принудительно освобождаем порт от любых зависших ciadpi
     pkill -9 -x ciadpi 2>/dev/null || true
+    pkill -9 -f ciadpi 2>/dev/null || true
     for stale_pid in ${(f)$(lsof -ti tcp:$PORT -sTCP:LISTEN 2>/dev/null)}; do
         kill -9 "$stale_pid" 2>/dev/null || true
     done
@@ -90,7 +116,7 @@ render_ui() {
     echo "  Статус:           \033[1;32m🟢 РАБОТАЕТ И ЗАЩИЩАЕТ ТРАФИК\033[0m"
     echo "  SOCKS5 адрес:     \033[1;33m$IP:$PORT\033[0m"
     echo "  Сетевая служба:   \033[1;36m$SERVICE (системный прокси активен)\033[0m"
-    echo "  Записей в истории:\033[1;37m $count\033[0m"
+    echo "  Записей в истории:\033[1;37m $count / $MAX_HISTORY\033[0m"
     echo ""
     echo "  \033[1;37mАктивная стратегия:\033[0m"
     echo "  \033[1;36m$ACTIVE_STRATEGY\033[0m"
@@ -102,8 +128,7 @@ render_ui() {
         echo "  $1"
         echo "\033[1;32m========================================================\033[0m"
     fi
-    echo "  \033[1;33mВставьте новую стратегию и нажмите Enter для смены:\033[0m"
-    printf "> "
+    echo "  \033[1;33mВставьте новую строку или листайте историю стрелками ↑ / ↓:\033[0m"
 }
 
 # Функция корректного выхода и восстановления сети
@@ -121,21 +146,6 @@ cleanup() {
 
 trap cleanup INT TERM HUP EXIT
 
-# Если аргументы переданы через командную строку (например: run.command -m 2 ...)
-if [[ $# -gt 0 ]]; then
-    NEW_STRAT="$*"
-    append_strategy "$NEW_STRAT"
-    ACTIVE_STRATEGY="$NEW_STRAT"
-else
-    ACTIVE_STRATEGY=$(get_active_strategy)
-    if [[ -z "$ACTIVE_STRATEGY" ]]; then
-        ACTIVE_STRATEGY="-m 2 -d1 -d1+s -r1+s -s3+s -s6+s -s9+s -s12+s -s15+s -s20+s -s25+s -s30+s -s35+s -a1"
-        append_strategy "$ACTIVE_STRATEGY"
-    fi
-fi
-
-STRATEGY_ARGS=(${(z)ACTIVE_STRATEGY})
-
 # Включаем системный прокси macOS
 networksetup -setsocksfirewallproxy "$SERVICE" "$IP" "$PORT" 2>/dev/null
 networksetup -setsocksfirewallproxystate "$SERVICE" on 2>/dev/null
@@ -144,16 +154,22 @@ networksetup -setsocksfirewallproxystate "$SERVICE" on 2>/dev/null
 start_ciadpi
 render_ui
 
-# Интерактивный цикл: слушает ввод новой стратегии в течение всей работы программы
+# Подключаем файл config к механизму истории Zsh
+fc -p "$CONFIG_FILE" "$MAX_HISTORY" "$MAX_HISTORY"
+
+# Интерактивный цикл с поддержкой стрелок ↑ / ↓ через встроенный ZLE
 while true; do
-    if read -r USER_INPUT; then
+    USER_INPUT=""
+    # vared с флагом -h активирует стрелки вверх/вниз по истории файла config
+    if vared -p "  > " -h USER_INPUT; then
         USER_INPUT=$(echo "$USER_INPUT" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        if [[ -n "$USER_INPUT" ]]; then
-            append_strategy "$USER_INPUT"
+        if [[ -n "$USER_INPUT" && "$USER_INPUT" != "$ACTIVE_STRATEGY" ]]; then
+            save_strategy "$USER_INPUT"
+            print -s "$USER_INPUT"
             ACTIVE_STRATEGY="$USER_INPUT"
             STRATEGY_ARGS=(${(z)ACTIVE_STRATEGY})
             start_ciadpi
-            render_ui "\033[1;32m✓ Стратегия успешно обновлена на лету и применена!\033[0m"
+            render_ui "\033[1;32m✓ Новая стратегия записана в файл и успешно применена!\033[0m"
         else
             render_ui
         fi

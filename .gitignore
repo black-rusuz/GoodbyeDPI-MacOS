@@ -1,0 +1,12 @@
+.idea
+
+# Build artifacts
+build/
+src/*.o
+src/ciadpi
+ciadpi
+
+# OS artifacts
+.DS_Store
+*.swp
+*~

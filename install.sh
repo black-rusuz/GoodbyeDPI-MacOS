@@ -71,12 +71,23 @@ echo "Формирование автономного приложения $APP_
 mkdir -p "$APP_DIR"
 rm -rf "$APP_PATH"
 
-# AppleScript-загрузчик, который запускает run.command прямо изнутри своего бандла
+# AppleScript-загрузчик: переиспользует первичное пустое окно терминала, предотвращая дублирование
 osacompile -o "$APP_PATH" -e '
 set appPath to POSIX path of (path to me)
 set runScript to appPath & "Contents/Resources/run.command"
+set wasRunning to application "Terminal" is running
 tell application "Terminal"
     activate
+    if not wasRunning then
+        repeat with i from 1 to 20
+            if (count of windows) > 0 then exit repeat
+            delay 0.05
+        end repeat
+        if (count of windows) > 0 and not (busy of window 1) then
+            do script quoted form of runScript in window 1
+            return
+        end if
+    end if
     do script quoted form of runScript
 end tell
 '

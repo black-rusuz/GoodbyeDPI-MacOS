@@ -10,3 +10,7 @@ ciadpi
 .DS_Store
 *.swp
 *~
+
+# Autotune reports
+autotune/reports/
+

@@ -1,0 +1,21 @@
+# Web UI и основные сервисы
+www.youtube.com
+m.youtube.com
+youtu.be
+
+# Статика, обложки и аватары
+i.ytimg.com
+yt3.ggpht.com
+
+# Внутренний API рекомендаций и метаданных
+youtubei.googleapis.com
+
+# Видеопотоки CDN (GoogleVideo)
+redirector.googlevideo.com
+rr1---sn-xapuu8g0-gv8e.googlevideo.com
+
+# Локальный кэш-сервер GGC (Ростелеком) с принудительной проверкой проблемного IP
+rr1---sn-xapuu8g0-gv8e.googlevideo.com 185.154.74.236
+
+# Телеметрия плеера
+jnn-pa.googleapis.com

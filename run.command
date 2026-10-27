@@ -15,7 +15,7 @@ fi
 CONFIG_FILE="$DIR/config"
 PORT="${BYEDPI_PORT:-1080}"
 IP="127.0.0.1"
-MAX_HISTORY=300
+MAX_HISTORY=256
 CIADPI_PID=""
 
 # Чтение последней непустой строки конфигурации (текущей стратегии)

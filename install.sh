@@ -59,10 +59,11 @@ rm -f "$REPO_DIR/ciadpi" 2>/dev/null || true
 chmod +x "$REPO_DIR/run.command"
 chmod +x "$REPO_DIR/uninstall.sh" 2>/dev/null || true
 
-# 3. Дефолтный конфиг
+# 3. Дефолтный конфиг с историей
 if [[ ! -f "$REPO_DIR/config" ]]; then
-    echo "Создание дефолтного конфига со стратегией..."
-    echo "-m 2 -d1 -d1+s -r1+s -s3+s -s6+s -s9+s -s12+s -s15+s -s20+s -s25+s -s30+s -s35+s -a1" > "$REPO_DIR/config"
+    echo "Создание файла config с историей..."
+    echo "# $(date '+%Y-%m-%d %H:%M:%S') - Начальная проверенная стратегия" > "$REPO_DIR/config"
+    echo "-m 2 -d1 -d1+s -r1+s -s3+s -s6+s -s9+s -s12+s -s15+s -s20+s -s25+s -s30+s -s35+s -a1" >> "$REPO_DIR/config"
 fi
 
 # 4. Сборка автономного приложения ByeDPI.app в ~/Applications

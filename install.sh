@@ -6,7 +6,7 @@ APP_DIR="$HOME/Applications"
 APP_NAME="ByeDPI.app"
 APP_PATH="$APP_DIR/$APP_NAME"
 
-# Определяем режим: локальный (из git-клона) или удаленный (curl | zsh)
+# Определение режима работы: локальный запуск из репозитория или удалённая установка (curl | zsh)
 if [[ -n "$0" && -f "$(dirname "$0")/run.command" ]]; then
     REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
     IS_CURL=0
@@ -16,7 +16,7 @@ else
     REPO_DIR="$TEMP_DIR"
 fi
 
-# Очистка временных файлов при выходе в режиме curl
+# Очистка временного каталога при завершении удалённой установки
 cleanup_temp() {
     if [[ $IS_CURL -eq 1 && -n "$TEMP_DIR" && -d "$TEMP_DIR" ]]; then
         rm -rf "$TEMP_DIR"
@@ -25,28 +25,28 @@ cleanup_temp() {
 trap cleanup_temp EXIT
 
 if [[ $IS_CURL -eq 1 ]]; then
-    echo "=== Удаленная установка ByeDPI для macOS (через curl) ==="
+    echo "=== Удалённая установка ByeDPI для macOS ==="
     echo "Загрузка репозитория..."
     git clone --recurse-submodules "$GITHUB_REPO" "$REPO_DIR"
 else
     echo "=== Локальная сборка и установка ByeDPI для macOS ==="
 fi
 
-echo "Рабочая директория сборки: $REPO_DIR"
+echo "Каталог сборки: $REPO_DIR"
 
-# 1. Проверка подмодуля с исходниками C
+# 1. Проверка и подготовка подмодуля исходного кода C
 if [[ ! -f "$REPO_DIR/src/Makefile" ]]; then
-    echo "Инициализация подмодуля исходников src..."
+    echo "Инициализация подмодуля с исходным кодом ciadpi..."
     if [[ -d "$REPO_DIR/.git" ]]; then
         git -C "$REPO_DIR" submodule update --init --recursive
     else
-        echo "Загрузка архива исходников с GitHub..."
+        echo "Загрузка архива исходного кода с GitHub..."
         mkdir -p "$REPO_DIR/src"
         curl -fsSL https://github.com/hufrea/byedpi/archive/refs/heads/main.tar.gz | tar -xz -C "$REPO_DIR/src" --strip-components=1
     fi
 fi
 
-# 2. Компиляция бинарника ciadpi в папку build/
+# 2. Компиляция бинарного файла ciadpi в каталог build/
 BUILD_DIR="$REPO_DIR/build"
 mkdir -p "$BUILD_DIR"
 
@@ -59,18 +59,18 @@ rm -f "$REPO_DIR/ciadpi" 2>/dev/null || true
 chmod +x "$REPO_DIR/run.command"
 chmod +x "$REPO_DIR/uninstall.sh" 2>/dev/null || true
 
-# 3. Проверка наличия файла config
+# 3. Проверка файла конфигурации
 if [[ ! -f "$REPO_DIR/config" ]]; then
-    echo "Ошибка: файл config не найден в репозитории!"
+    echo "Ошибка: файл конфигурации config не найден в репозитории."
     exit 1
 fi
 
-# 4. Сборка автономного приложения ByeDPI.app в ~/Applications
-echo "Формирование автономного приложения $APP_PATH..."
+# 4. Формирование автономного бандла приложения ByeDPI.app в ~/Applications
+echo "Сборка приложения $APP_PATH..."
 mkdir -p "$APP_DIR"
 rm -rf "$APP_PATH"
 
-# AppleScript-загрузчик: переиспользует первичное окно терминала, предотвращая появление дубликатов
+# AppleScript-загрузчик: переиспользует первичное окно терминала при холодном старте, избегая появления лишних окон
 osacompile -o "$APP_PATH" -e '
 set appPath to POSIX path of (path to me)
 set runScript to appPath & "Contents/Resources/run.command"
@@ -91,7 +91,7 @@ tell application "Terminal"
 end tell
 '
 
-# Копируем всё необходимое внутрь бандла приложения
+# Копирование необходимых компонентов внутрь бандла приложения
 RESOURCES="$APP_PATH/Contents/Resources"
 mkdir -p "$RESOURCES"
 cp "$BUILD_DIR/ciadpi" "$RESOURCES/ciadpi"
@@ -100,7 +100,7 @@ cp "$REPO_DIR/config" "$RESOURCES/config"
 cp "$REPO_DIR/uninstall.sh" "$RESOURCES/uninstall.sh" 2>/dev/null || true
 chmod +x "$RESOURCES/ciadpi" "$RESOURCES/run.command" "$RESOURCES/uninstall.sh" 2>/dev/null || true
 
-# Устанавливаем иконку терминала
+# Установка системной иконки терминала для бандла
 ICON_SRC="/System/Applications/Utilities/Terminal.app/Contents/Resources/Terminal.icns"
 if [[ -f "$ICON_SRC" ]]; then
     cp "$ICON_SRC" "$RESOURCES/applet.icns"
@@ -108,5 +108,5 @@ if [[ -f "$ICON_SRC" ]]; then
 fi
 
 echo ""
-echo "✅ ByeDPI успешно скомпилирован в build/ и установлен в $APP_PATH!"
-echo "🚀 Запуск: через Launchpad или Spotlight (Cmd + Пробел -> ByeDPI)"
+echo "✅ ByeDPI успешно скомпилирован и установлен в $APP_PATH"
+echo "🚀 Запуск: через Launchpad или Spotlight"

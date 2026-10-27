@@ -65,7 +65,23 @@ if [[ ! -f "$REPO_DIR/config" ]]; then
     exit 1
 fi
 
-# 4. Формирование автономного бандла приложения ByeDPI.app в ~/Applications
+# 4. Генерация иконки приложения (.icns) в каталоге build/
+if [[ -f "$REPO_DIR/icon.png" ]]; then
+    echo "Генерация набора иконок (.icns) в build/..."
+    ICONSET_DIR="$BUILD_DIR/ByeDPI.iconset"
+    mkdir -p "$ICONSET_DIR"
+
+    for sz in 16 32 128 256 512; do
+        sips -z $sz $sz "$REPO_DIR/icon.png" --out "$ICONSET_DIR/icon_${sz}x${sz}.png" >/dev/null
+        (( sz2 = sz * 2 ))
+        sips -z $sz2 $sz2 "$REPO_DIR/icon.png" --out "$ICONSET_DIR/icon_${sz}x${sz}@2x.png" >/dev/null
+    done
+
+    iconutil -c icns "$ICONSET_DIR" -o "$BUILD_DIR/applet.icns"
+    rm -rf "$ICONSET_DIR"
+fi
+
+# 5. Формирование автономного бандла приложения ByeDPI.app в ~/Applications
 echo "Сборка приложения $APP_PATH..."
 mkdir -p "$APP_DIR"
 rm -rf "$APP_PATH"
@@ -95,18 +111,14 @@ end tell
 RESOURCES="$APP_PATH/Contents/Resources"
 mkdir -p "$RESOURCES"
 cp "$BUILD_DIR/ciadpi" "$RESOURCES/ciadpi"
+cp "$BUILD_DIR/applet.icns" "$RESOURCES/applet.icns"
 cp "$REPO_DIR/run.command" "$RESOURCES/run.command"
 cp "$REPO_DIR/config" "$RESOURCES/config"
 cp "$REPO_DIR/uninstall.sh" "$RESOURCES/uninstall.sh" 2>/dev/null || true
 chmod +x "$RESOURCES/ciadpi" "$RESOURCES/run.command" "$RESOURCES/uninstall.sh" 2>/dev/null || true
 
-# Установка системной иконки терминала для бандла
-ICON_SRC="/System/Applications/Utilities/Terminal.app/Contents/Resources/Terminal.icns"
-if [[ -f "$ICON_SRC" ]]; then
-    cp "$ICON_SRC" "$RESOURCES/applet.icns"
-    touch "$APP_PATH"
-fi
+touch "$APP_PATH"
 
 echo ""
 echo "✅ ByeDPI успешно скомпилирован и установлен в $APP_PATH"
-echo "🚀 Запуск: через Launchpad или Spotlight"
+echo "🚀 Запуск: через Launchpad или поиск Spotlight (Cmd + Пробел → ByeDPI)"

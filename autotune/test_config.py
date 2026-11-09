@@ -234,27 +234,124 @@ def probe_host(target, proxy_port, timeout=5.0):
     }
 
 
-def run_speed_test(proxy_port, timeout=8.0):
-    """Measure raw download speed on a real video CDN chunk."""
-    probe_url = "https://redirector.googlevideo.com/videoplayback?id=test&range=0-2097152"
-    cmd = [
-        "curl",
-        "-s",
-        "-o", "/dev/null",
-        "-w", "%{http_code}|%{speed_download}|%{size_download}|%{time_total}",
-        "--max-time", str(timeout),
-        "-x", f"socks5h://127.0.0.1:{proxy_port}",
-        probe_url,
-    ]
+class TargetReached(Exception):
+    """Raised when target download volume has been reached in benchmark."""
+    pass
+
+
+def benchmark_real_stream(proxy_port, target_mb=15, timeout=25.0):
+    """
+    Download a real chunk of YouTube video stream through the ByeDPI SOCKS5 proxy
+    to test real-world throughput, buffer stability, and TCP CWND behavior.
+    """
+    import tempfile
+    import shutil
+
+    test_video_url = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+    target_bytes = int(target_mb * 1024 * 1024)
+
+    stats = {
+        "downloaded_bytes": 0,
+        "speeds": [],
+        "start_time": None,
+        "end_time": None,
+        "stalls": 0,
+        "error": None,
+    }
+
+    def progress_hook(d):
+        now = time.time()
+        if d.get("status") == "downloading":
+            if stats["start_time"] is None:
+                stats["start_time"] = now
+
+            dl = d.get("downloaded_bytes", 0)
+            stats["downloaded_bytes"] = dl
+
+            speed = d.get("speed")
+            if speed is not None:
+                stats["speeds"].append(speed)
+                if speed < 100 * 1024 and dl > 500 * 1024:
+                    stats["stalls"] += 1
+
+            if dl >= target_bytes:
+                stats["end_time"] = now
+                raise TargetReached()
+
+    temp_dir = tempfile.mkdtemp(prefix="byedpi_bench_")
+    outtmpl = os.path.join(temp_dir, "bench_stream.%(ext)s")
+
+    ydl_opts = {
+        "proxy": f"socks5://127.0.0.1:{proxy_port}",
+        "format": "135/244/243/396/bestvideo/best",
+        "outtmpl": outtmpl,
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": timeout,
+        "progress_hooks": [progress_hook],
+    }
+
     try:
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout + 2)
-        parts = res.stdout.strip().split("|")
-        if len(parts) == 4:
-            speed_mbps = (float(parts[1]) * 8) / (1024 * 1024)
-            return round(speed_mbps, 2)
-    except Exception:
-        pass
-    return None
+        try:
+            import yt_dlp
+        except ImportError:
+            return {
+                "success": False,
+                "error": "Модуль yt-dlp не установлен",
+                "downloaded_mb": 0,
+                "avg_mbps": 0,
+            }
+
+        start_probe = time.time()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                ydl.download([test_video_url])
+            except TargetReached:
+                pass
+            except Exception as e:
+                stats["error"] = str(e)
+
+        end_probe = stats["end_time"] or time.time()
+        transfer_duration = end_probe - (stats["start_time"] or start_probe)
+        if transfer_duration <= 0:
+            transfer_duration = 0.001
+
+        mb_down = stats["downloaded_bytes"] / (1024 * 1024)
+        avg_mbps = (stats["downloaded_bytes"] * 8) / (transfer_duration * 1024 * 1024)
+
+        peak_mbps = (max(stats["speeds"]) * 8 / (1024 * 1024)) if stats["speeds"] else avg_mbps
+        min_mbps = (min(stats["speeds"]) * 8 / (1024 * 1024)) if stats["speeds"] else avg_mbps
+
+        success = mb_down >= (target_mb * 0.7) and avg_mbps > 0.5
+
+        if avg_mbps >= 50.0:
+            quality = "🟢 Идеально для 4K 60fps Ultra HD (без буферизации)"
+        elif avg_mbps >= 20.0:
+            quality = "🟢 Отлично для 1440p / 1080p60 Full HD"
+        elif avg_mbps >= 8.0:
+            quality = "🟡 Достаточно для 1080p (возможна задержка старта)"
+        elif avg_mbps >= 3.0:
+            quality = "🟡 Базовый стриминг 720p (риск просадок при высоком битрейте)"
+        else:
+            quality = "🔴 Буферизация / Шейпинг (коллапс TCP CWND или потеря пакетов)"
+
+        return {
+            "success": success,
+            "target_mb": target_mb,
+            "downloaded_mb": round(mb_down, 2),
+            "duration_sec": round(transfer_duration, 2),
+            "avg_mbps": round(avg_mbps, 2),
+            "peak_mbps": round(peak_mbps, 2),
+            "min_mbps": round(min_mbps, 2),
+            "stalls": stats["stalls"],
+            "quality": quality,
+            "error": stats["error"],
+        }
+    finally:
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def wait_for_port(port, timeout=3.0):
@@ -269,7 +366,7 @@ def wait_for_port(port, timeout=3.0):
     return False
 
 
-def generate_markdown_report(strategy_str, port, is_isolated, results, speed_mbps=None):
+def generate_markdown_report(strategy_str, port, is_isolated, results, stream_bench=None):
     """Generate structured markdown report."""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     total_count = len(results)
@@ -282,6 +379,10 @@ def generate_markdown_report(strategy_str, port, is_isolated, results, speed_mbp
     verdict_emoji = "🟢" if pass_pct == 100 else ("🟡" if pass_pct >= 70 else "🔴")
     port_label = f"{port} (Изолированный тестовый экземпляр)" if is_isolated else f"{port} (Активный рабочий прокси)"
 
+    speed_info = ""
+    if stream_bench and stream_bench.get("avg_mbps") is not None:
+        speed_info = f" | Реальный стрим: **{stream_bench['avg_mbps']} Мбит/с**"
+
     lines = [
         "# Отчёт тестирования стратегии ByeDPI",
         "",
@@ -290,7 +391,7 @@ def generate_markdown_report(strategy_str, port, is_isolated, results, speed_mbp
         f"- **Порт:** `{port_label}`",
         f"- **Результат:** {verdict_emoji} **{passed_count}/{total_count} доступно ({pass_pct}%)**"
         + (f" | Ср. TLS хэндшейк: **{avg_handshake} мс**" if avg_handshake else "")
-        + (f" | Скорость CDN: **{speed_mbps} Мбит/с**" if speed_mbps is not None else ""),
+        + speed_info,
         "",
         "## Сводная таблица доступности хостов",
         "",
@@ -311,6 +412,20 @@ def generate_markdown_report(strategy_str, port, is_isolated, results, speed_mbp
         lines.append(
             f"| {host_display} | {r['status']} | {http_val} | {hs_val} | {ttfb_val} | {speed_val} | {r['diagnosis']} |"
         )
+
+    if stream_bench and stream_bench.get("downloaded_mb", 0) > 0:
+        lines.extend([
+            "",
+            "## Реальный стресс-тест видеопотока (YouTube CDN Stream Benchmark)",
+            "",
+            f"- **Объём переданных видеоданных:** `{stream_bench['downloaded_mb']} МБ` (из запрошенных {stream_bench['target_mb']} МБ)",
+            f"- **Длительность загрузки:** `{stream_bench['duration_sec']} сек`",
+            f"- **Средняя пропускная способность:** **{stream_bench['avg_mbps']} Мбит/с**",
+            f"- **Пиковая скорость CDN:** `{stream_bench['peak_mbps']} Мбит/с` (минимум: `{stream_bench['min_mbps']} Мбит/с`)",
+            f"- **Оценка качества:** {stream_bench['quality']}",
+        ])
+        if stream_bench.get("error"):
+            lines.append(f"- ⚠️ **Предупреждение при передаче:** `{stream_bench['error']}`")
 
     lines.extend([
         "",
@@ -397,7 +512,19 @@ def main():
     parser.add_argument(
         "--speed-test",
         action="store_true",
-        help="Perform video CDN throughput benchmark",
+        help="Perform real YouTube CDN video stream benchmark",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=15,
+        help="Target video chunk size in MB for stream benchmark (default: 15)",
+    )
+    parser.add_argument(
+        "--bench-timeout",
+        type=float,
+        default=30.0,
+        help="Timeout in seconds for stream benchmark (default: 30.0)",
     )
     parser.add_argument(
         "--output",
@@ -454,6 +581,7 @@ def main():
             sys.exit(1)
 
     results = []
+    stream_bench = None
     try:
         print(f"📡 Probing {len(targets)} targets (timeout: {args.timeout}s)...")
         for idx, t in enumerate(targets, 1):
@@ -463,11 +591,16 @@ def main():
             results.append(res)
             print(f"{res['status']:12} (TLS: {res['handshake_ms']}ms, HTTP {res['http_code']})")
 
-        speed_mbps = None
         if args.speed_test:
-            print("⚡ Running CDN video speed test...")
-            speed_mbps = run_speed_test(test_port)
-            print(f"  Speed result: {speed_mbps} Mbps")
+            print(f"⚡ Running REAL YouTube video stream benchmark ({args.chunk_size} MB)...")
+            stream_bench = benchmark_real_stream(test_port, target_mb=args.chunk_size, timeout=args.bench_timeout)
+            if stream_bench["downloaded_mb"] > 0:
+                print(f"  ✅ Downloaded: {stream_bench['downloaded_mb']} MB in {stream_bench['duration_sec']}s")
+                print(f"  ⚡ Throughput: {stream_bench['avg_mbps']} Mbps (Peak: {stream_bench['peak_mbps']} Mbps)")
+                print(f"  🎬 Verdict: {stream_bench['quality']}")
+            else:
+                err_msg = stream_bench.get('error') or 'Could not download media stream'
+                print(f"  ❌ Benchmark failed: {err_msg}")
 
     finally:
         if ciadpi_proc:
@@ -484,7 +617,7 @@ def main():
     # Ensure reports directory exists
     os.makedirs(REPORTS_DIR, exist_ok=True)
 
-    report_md = generate_markdown_report(strategy_str, test_port, is_isolated, results, speed_mbps)
+    report_md = generate_markdown_report(strategy_str, test_port, is_isolated, results, stream_bench)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     history_report_path = os.path.join(REPORTS_DIR, f"test_{timestamp}.md")

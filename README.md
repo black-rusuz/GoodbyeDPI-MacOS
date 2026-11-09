@@ -25,7 +25,7 @@
 Загружает репозиторий во временный каталог, компилирует бинарный файл под архитектуру вашего Mac, собирает бандл `ByeDPI.app` в `~/Applications` и удаляет временные файлы сборки:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rusuz/byedpi/master/install.sh | zsh
+curl -fsSL https://raw.githubusercontent.com/black-rusuz/GoodbyeDPI-MacOS/master/install.sh | zsh
 ```
 
 ---
@@ -34,8 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/rusuz/byedpi/master/install.sh | zs
 
 Подходит для разработки и тестирования локальных изменений:
 
+git clone --recurse-submodules https://github.com/black-rusuz/GoodbyeDPI-MacOS.git
 ```bash
-git clone --recurse-submodules https://github.com/rusuz/byedpi.git
 cd byedpi
 ./install.sh
 ```
@@ -83,7 +83,7 @@ cd byedpi
 ### Удаление одной командой (curl)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rusuz/byedpi/master/uninstall.sh | zsh
+curl -fsSL https://raw.githubusercontent.com/black-rusuz/GoodbyeDPI-MacOS/master/uninstall.sh | zsh
 ```
 
 ### Удаление из локального каталога

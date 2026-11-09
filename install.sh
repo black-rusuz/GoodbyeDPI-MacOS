@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -e
 
-GITHUB_REPO="${BYEDPI_REPO:-https://github.com/rusuz/byedpi}"
+GITHUB_REPO="${BYEDPI_REPO:-https://github.com/black-rusuz/GoodbyeDPI-MacOS}"
 APP_DIR="$HOME/Applications"
 APP_NAME="ByeDPI.app"
 APP_PATH="$APP_DIR/$APP_NAME"

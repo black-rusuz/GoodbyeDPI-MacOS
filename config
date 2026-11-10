@@ -3,5 +3,7 @@
 -s1 -q1 -Y -Ar -s5 -o1+s -At -f-1 -r1+s -As -s1 -o1 +s -s-1 -An -b+500
 -s0 -o1 -d1 -r1+s -Ar -o1 -At -f-1 -r1+s -As
 -m3 -r-5+se -r5+se -n "rbc.ru" -f-10 -o1 -a6
-
 -m2 -d1 -d1+s -r1+s -s3+s -s6+s -s9+s -s12+s -s15+s -s20+s -s25+s -s30+s -s35+s -a1
+
+-m2 -d1+s -r1+s -s3+s -s6+s -s9+s -s12+s -s15+s -s20+s -s25+s -s30+s -a1
+-r1+s -r+sm -r-2+se -s2+s -s+sm -s+se -a1

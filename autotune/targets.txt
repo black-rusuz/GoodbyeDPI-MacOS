@@ -14,8 +14,16 @@ youtubei.googleapis.com
 redirector.googlevideo.com
 rr1---sn-xapuu8g0-gv8e.googlevideo.com
 
-# Локальный кэш-сервер GGC (Ростелеком) с принудительной проверкой проблемного IP
+# Диспетчер потоков GoogleVideo с привязкой IP
+redirector.googlevideo.com 74.125.131.198
+
+# Локальные кэш-серверы GGC (Ростелеком) с принудительной проверкой IP
 rr1---sn-xapuu8g0-gv8e.googlevideo.com 185.154.74.236
+rr2---sn-xapuu8g0-gv8e.googlevideo.com 185.154.74.237
+
+# Зарубежные CDN-узлы GoogleVideo
+r4---sn-aj5go5-53.googlevideo.com 173.194.151.68
+r1---sn-5goeen7y.googlevideo.com 74.125.110.134
 
 # Телеметрия плеера
 jnn-pa.googleapis.com

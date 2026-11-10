@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 ByeDPI Strategy Tester for macOS
-Tests host availability and packet transmission characteristics against TSPU/DPI.
+Tests host availability, packet transmission characteristics, and real CDN streaming against TSPU/DPI.
+Can be used both as a CLI tool and as a Python module for batch evaluation.
 """
 
 import sys
@@ -366,6 +367,186 @@ def wait_for_port(port, timeout=3.0):
     return False
 
 
+def evaluate_strategy(
+    strategy_str=None,
+    is_current=False,
+    test_port=None,
+    targets=None,
+    timeout=5.0,
+    speed_test=False,
+    chunk_size=15,
+    bench_timeout=30.0,
+    verbose=True,
+):
+    """
+    Core function: evaluate a ByeDPI strategy.
+    
+    If is_current is True: tests currently active proxy on 127.0.0.1:port (default 1080).
+    If is_current is False: spawns an isolated ciadpi instance on a free port.
+    
+    Returns structured results dict:
+    {
+        "strategy": strategy_str,
+        "port": test_port,
+        "is_isolated": is_isolated,
+        "total": int,
+        "passed": int,
+        "pass_pct": float,
+        "avg_handshake_ms": int,
+        "avg_ttfb_ms": int,
+        "results": list[dict],
+        "stream_bench": dict | None,
+        "status_counts": dict[str, int],
+        "success": bool,
+        "error": str | None,
+    }
+    """
+    if targets is None:
+        targets = load_targets(DEFAULT_TARGETS_FILE)
+
+    ciadpi_proc = None
+    is_isolated = not is_current
+
+    if is_current:
+        test_port = test_port or ACTIVE_PORT
+        strategy_str = strategy_str or get_active_strategy() or "(Активный рабочий прокси)"
+        if verbose:
+            print(f"🔍 Testing active proxy on 127.0.0.1:{test_port}...")
+            print(f"⚙️  Active Strategy: {strategy_str}")
+    else:
+        test_port = test_port or find_free_port(DEFAULT_PORT)
+        strategy_str = strategy_str or ""
+        ciadpi_bin = locate_ciadpi()
+        if verbose:
+            print(f"🚀 Spawning isolated ciadpi on 127.0.0.1:{test_port}...")
+            print(f"⚙️  Strategy: {strategy_str}")
+
+        cmd_args = [ciadpi_bin, "-i", "127.0.0.1", "-p", str(test_port)] + shlex.split(strategy_str)
+        try:
+            ciadpi_proc = subprocess.Popen(
+                cmd_args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                preexec_fn=os.setsid,
+            )
+        except Exception as e:
+            return {
+                "strategy": strategy_str,
+                "port": test_port,
+                "is_isolated": True,
+                "total": len(targets),
+                "passed": 0,
+                "pass_pct": 0.0,
+                "avg_handshake_ms": 0,
+                "avg_ttfb_ms": 0,
+                "results": [],
+                "stream_bench": None,
+                "status_counts": {"FAIL": len(targets)},
+                "success": False,
+                "error": f"Failed to execute ciadpi binary: {e}",
+            }
+
+        if not wait_for_port(test_port, timeout=3.0):
+            err_output = ""
+            if ciadpi_proc.poll() is not None:
+                _, err_output = ciadpi_proc.communicate()
+            if ciadpi_proc:
+                try:
+                    os.killpg(os.getpgid(ciadpi_proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            err_msg = err_output.strip() or "ciadpi failed to bind or exited immediately"
+            if verbose:
+                print(f"❌ Error: ciadpi failed to bind to 127.0.0.1:{test_port}. Reason: {err_msg}")
+            return {
+                "strategy": strategy_str,
+                "port": test_port,
+                "is_isolated": True,
+                "total": len(targets),
+                "passed": 0,
+                "pass_pct": 0.0,
+                "avg_handshake_ms": 0,
+                "avg_ttfb_ms": 0,
+                "results": [],
+                "stream_bench": None,
+                "status_counts": {"FAIL": len(targets)},
+                "success": False,
+                "error": err_msg,
+            }
+
+    results = []
+    stream_bench = None
+    try:
+        if verbose:
+            print(f"📡 Probing {len(targets)} targets (timeout: {timeout}s)...")
+        for idx, t in enumerate(targets, 1):
+            lbl = t["domain"] + (f" ({t['resolve_ip']})" if t.get("resolve_ip") else "")
+            if verbose:
+                print(f"  [{idx}/{len(targets)}] {lbl:45} ... ", end="", flush=True)
+            res = probe_host(t, test_port, timeout=timeout)
+            results.append(res)
+            if verbose:
+                print(f"{res['status']:12} (TLS: {res['handshake_ms']}ms, HTTP {res['http_code']})")
+
+        if speed_test:
+            if verbose:
+                print(f"⚡ Running REAL YouTube video stream benchmark ({chunk_size} MB)...")
+            stream_bench = benchmark_real_stream(test_port, target_mb=chunk_size, timeout=bench_timeout)
+            if verbose:
+                if stream_bench["downloaded_mb"] > 0:
+                    print(f"  ✅ Downloaded: {stream_bench['downloaded_mb']} MB in {stream_bench['duration_sec']}s")
+                    print(f"  ⚡ Throughput: {stream_bench['avg_mbps']} Mbps (Peak: {stream_bench['peak_mbps']} Mbps)")
+                    print(f"  🎬 Verdict: {stream_bench['quality']}")
+                else:
+                    err_msg = stream_bench.get("error") or "Could not download media stream"
+                    print(f"  ❌ Benchmark failed: {err_msg}")
+
+    finally:
+        if ciadpi_proc:
+            if verbose:
+                print("🛑 Shutting down isolated test instance...")
+            try:
+                os.killpg(os.getpgid(ciadpi_proc.pid), signal.SIGTERM)
+                ciadpi_proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(ciadpi_proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+
+    total_count = len(results)
+    passed_count = sum(1 for r in results if "OK" in r["status"])
+    pass_pct = round((passed_count / total_count * 100), 1) if total_count > 0 else 0.0
+
+    valid_handshakes = [r["handshake_ms"] for r in results if r["handshake_ms"] > 0]
+    avg_handshake = round(sum(valid_handshakes) / len(valid_handshakes)) if valid_handshakes else 0
+
+    valid_ttfbs = [r["ttfb_ms"] for r in results if r["ttfb_ms"] > 0]
+    avg_ttfb = round(sum(valid_ttfbs) / len(valid_ttfbs)) if valid_ttfbs else 0
+
+    status_counts = {}
+    for r in results:
+        status_key = r["status"].replace("🟢 ", "").replace("🔴 ", "").replace("🟡 ", "").strip()
+        status_counts[status_key] = status_counts.get(status_key, 0) + 1
+
+    return {
+        "strategy": strategy_str,
+        "port": test_port,
+        "is_isolated": is_isolated,
+        "total": total_count,
+        "passed": passed_count,
+        "pass_pct": pass_pct,
+        "avg_handshake_ms": avg_handshake,
+        "avg_ttfb_ms": avg_ttfb,
+        "results": results,
+        "stream_bench": stream_bench,
+        "status_counts": status_counts,
+        "success": (passed_count == total_count and total_count > 0),
+        "error": None,
+    }
+
+
 def generate_markdown_report(strategy_str, port, is_isolated, results, stream_bench=None):
     """Generate structured markdown report."""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -534,90 +715,37 @@ def main():
 
     args = parser.parse_args()
 
-    # Load targets
     targets = load_targets(args.targets)
     if not targets:
         print("Error: No targets found in targets file.")
         sys.exit(1)
 
-    ciadpi_proc = None
-    is_isolated = False
-    test_port = args.port
+    eval_res = evaluate_strategy(
+        strategy_str=args.config if not args.current else None,
+        is_current=args.current,
+        test_port=args.port,
+        targets=targets,
+        timeout=args.timeout,
+        speed_test=args.speed_test,
+        chunk_size=args.chunk_size,
+        bench_timeout=args.bench_timeout,
+        verbose=True,
+    )
 
-    if args.current:
-        test_port = test_port or ACTIVE_PORT
-        strategy_str = get_active_strategy() or "(Активный рабочий прокси)"
-        print(f"🔍 Testing active proxy on 127.0.0.1:{test_port}...")
-        print(f"⚙️  Active Strategy: {strategy_str}")
-    else:
-        is_isolated = True
-        test_port = test_port or find_free_port(DEFAULT_PORT)
-        strategy_str = args.config
-        ciadpi_bin = locate_ciadpi()
-        print(f"🚀 Spawning isolated ciadpi on 127.0.0.1:{test_port}...")
-        print(f"⚙️  Strategy: {strategy_str}")
-
-        cmd_args = [ciadpi_bin, "-i", "127.0.0.1", "-p", str(test_port)] + shlex.split(strategy_str)
-        ciadpi_proc = subprocess.Popen(
-            cmd_args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            preexec_fn=os.setsid,
-        )
-
-        if not wait_for_port(test_port, timeout=3.0):
-            err_output = ""
-            if ciadpi_proc.poll() is not None:
-                _, err_output = ciadpi_proc.communicate()
-            print(f"❌ Error: ciadpi failed to bind to 127.0.0.1:{test_port}.")
-            if err_output.strip():
-                print(f"   Причина ошибки ciadpi: {err_output.strip()}")
-            if ciadpi_proc:
-                try:
-                    os.killpg(os.getpgid(ciadpi_proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-            sys.exit(1)
-
-    results = []
-    stream_bench = None
-    try:
-        print(f"📡 Probing {len(targets)} targets (timeout: {args.timeout}s)...")
-        for idx, t in enumerate(targets, 1):
-            lbl = t["domain"] + (f" ({t['resolve_ip']})" if t.get("resolve_ip") else "")
-            print(f"  [{idx}/{len(targets)}] {lbl:45} ... ", end="", flush=True)
-            res = probe_host(t, test_port, timeout=args.timeout)
-            results.append(res)
-            print(f"{res['status']:12} (TLS: {res['handshake_ms']}ms, HTTP {res['http_code']})")
-
-        if args.speed_test:
-            print(f"⚡ Running REAL YouTube video stream benchmark ({args.chunk_size} MB)...")
-            stream_bench = benchmark_real_stream(test_port, target_mb=args.chunk_size, timeout=args.bench_timeout)
-            if stream_bench["downloaded_mb"] > 0:
-                print(f"  ✅ Downloaded: {stream_bench['downloaded_mb']} MB in {stream_bench['duration_sec']}s")
-                print(f"  ⚡ Throughput: {stream_bench['avg_mbps']} Mbps (Peak: {stream_bench['peak_mbps']} Mbps)")
-                print(f"  🎬 Verdict: {stream_bench['quality']}")
-            else:
-                err_msg = stream_bench.get('error') or 'Could not download media stream'
-                print(f"  ❌ Benchmark failed: {err_msg}")
-
-    finally:
-        if ciadpi_proc:
-            print("🛑 Shutting down isolated test instance...")
-            try:
-                os.killpg(os.getpgid(ciadpi_proc.pid), signal.SIGTERM)
-                ciadpi_proc.wait(timeout=1.0)
-            except Exception:
-                try:
-                    os.killpg(os.getpgid(ciadpi_proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+    if eval_res.get("error"):
+        print(f"❌ Execution failed: {eval_res['error']}")
+        sys.exit(1)
 
     # Ensure reports directory exists
     os.makedirs(REPORTS_DIR, exist_ok=True)
 
-    report_md = generate_markdown_report(strategy_str, test_port, is_isolated, results, stream_bench)
+    report_md = generate_markdown_report(
+        eval_res["strategy"],
+        eval_res["port"],
+        eval_res["is_isolated"],
+        eval_res["results"],
+        eval_res["stream_bench"],
+    )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     history_report_path = os.path.join(REPORTS_DIR, f"test_{timestamp}.md")
@@ -635,12 +763,11 @@ def main():
     print("=" * 60)
 
     # Print summary
-    passed = sum(1 for r in results if "OK" in r["status"])
-    total = len(results)
-    print(f"Final Score: {passed}/{total} hosts passed ({round(passed/total*100, 1)}%)")
+    print(f"Final Score: {eval_res['passed']}/{eval_res['total']} hosts passed ({eval_res['pass_pct']}%)")
+    if eval_res.get("stream_bench") and eval_res["stream_bench"].get("avg_mbps"):
+        print(f"Stream Throughput: {eval_res['stream_bench']['avg_mbps']} Mbps ({eval_res['stream_bench']['quality']})")
 
-    # Exit code: 0 if all critical passed, 1 if any failure
-    sys.exit(0 if passed == total else 2)
+    sys.exit(0 if eval_res["success"] else 2)
 
 
 if __name__ == "__main__":

@@ -34,18 +34,26 @@ def find_free_port(start_port=1081):
 
 
 def locate_ciadpi():
-    """Locate the ciadpi executable binary."""
+    """Locate the ciadpi executable binary across macOS and Linux."""
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    candidates = [
-        os.path.join(root_dir, "build", "ciadpi"),
-        os.path.join(root_dir, "ciadpi"),
-        "/usr/local/bin/ciadpi",
-    ]
+    if sys.platform.startswith("linux"):
+        candidates = [
+            os.path.join(root_dir, "build", "ciadpi_linux"),
+            os.path.join(root_dir, "build", "ciadpi"),
+            os.path.join(root_dir, "ciadpi"),
+            "/usr/local/bin/ciadpi",
+        ]
+    else:
+        candidates = [
+            os.path.join(root_dir, "build", "ciadpi"),
+            os.path.join(root_dir, "ciadpi"),
+            "/usr/local/bin/ciadpi",
+        ]
     for c in candidates:
         if os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     raise FileNotFoundError(
-        "ciadpi binary not found in build/ciadpi. Run ./install.sh or make -C src first."
+        "ciadpi binary not found in build/ciadpi or build/ciadpi_linux. Run ./install.sh or make -C src first."
     )
 
 

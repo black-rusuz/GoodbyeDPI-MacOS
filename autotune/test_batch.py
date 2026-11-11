@@ -23,18 +23,7 @@ from test_config import (
     REPORTS_DIR,
 )
 
-DEFAULT_CANDIDATE_STRATEGIES = [
-    ("Progressive Split (Базовая)", "-m2 -r1+s -s2+s -s4+s -s7+s -s11+s -s16+s -s21+s -s26+s -a1"),
-    ("Micro-split SNI (Шаг 2-3)",   "-m2 -r1+s -s1+s -s3+s -s5+s -s7+s -s9+s -s12+s -s16+s -a1"),
-    ("TLS Type Split (s1 + SNI)",  "-s1 -m2 -r1+s -s2+s -s4+s -s7+s -s11+s -s16+s -a1"),
-    ("Handshake Split (s2 + SNI)", "-s2 -m2 -r1+s -s2+s -s4+s -s7+s -s11+s -s16+s -a1"),
-    ("Record Split (s5 + SNI)",    "-s5 -m2 -r1+s -s2+s -s5+s -s9+s -s14+s -s20+s -a1"),
-    ("Dual TLS-Record (+sm)",      "-m2 -r1+s -r+sm -s2+s -s+sm -s12+s -s20+s -a1"),
-    ("Triple TLS-Record (sm+se)",  "-r1+s -r+sm -r-2+se -s2+s -s+sm -s-2+se -a1"),
-    ("TLS 1.3 Minor spoof (-m3)",   "-m3 -r1+s -s2+s -s4+s -s7+s -s11+s -s16+s -s21+s -a1"),
-    ("Disorder Safe (:2:0)",        "-m2 -d1+s:2:0 -r1+s -s3+s -s6+s -s12+s -s20+s -a1"),
-    ("OOB on SNI boundary",        "-m2 -o1+s -r1+s -s2+s -s4+s -s7+s -s11+s -a1"),
-]
+DEFAULT_STRATEGIES_FILE = os.path.join(os.path.dirname(__file__), "strategies.txt")
 
 
 def parse_strategy_line(line):
@@ -231,11 +220,18 @@ def main():
         strategies = load_strategies_from_file(args.file)
     elif args.configs:
         strategies = [(f"Конфиг #{idx}", c) for idx, c in enumerate(args.configs, 1)]
+    elif os.path.isfile(DEFAULT_STRATEGIES_FILE):
+        strategies = load_strategies_from_file(DEFAULT_STRATEGIES_FILE)
     else:
-        strategies = list(DEFAULT_CANDIDATE_STRATEGIES)
+        print(f"❌ Ошибка: Файл со стратегиями не найден: {DEFAULT_STRATEGIES_FILE}", file=sys.stderr)
+        print("👉 Укажите стратегии одним из способов:", file=sys.stderr)
+        print(f"   1. Создайте файл {DEFAULT_STRATEGIES_FILE} со списком стратегий", file=sys.stderr)
+        print("   2. Передайте файл через аргумент: --file <путь>", file=sys.stderr)
+        print("   3. Передайте строки через аргумент: --configs \"<стратегия_1>\" \"<стратегия_2>\"", file=sys.stderr)
+        sys.exit(1)
 
     if not strategies:
-        print("❌ Error: No strategies to test.", file=sys.stderr)
+        print("❌ Ошибка: Список стратегий пуст.", file=sys.stderr)
         sys.exit(1)
 
     if not args.json:
